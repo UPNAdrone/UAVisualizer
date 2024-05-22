@@ -41,7 +41,7 @@ def request_message_interval(message_id, interval_ms):
 
 async def send_model_state():
     # Connect to the websockets server
-    async with websockets.connect("ws://127.0.0.1:7890", ping_timeout=None, ping_interval=5) as websocket:
+    async with websockets.connect("ws://172.18.73.69:7890", ping_timeout=None, ping_interval=5) as websocket:
 
         message_queue = []  # Initialize an empty list to act as a message queue
         message_count = 0
@@ -156,7 +156,7 @@ async def send_model_state():
 
                 # Output list to a text file after every 1000 messages
                 if message_count % 1000 == 0:
-                    with open('delay_output_serialized.txt', 'a') as file:
+                    with open('delay_output_serialized_differentpc.txt', 'a') as file:
                         for delay_value in delay_list:
                             file.write(str(delay_value) + '\n')
                     # Clear the delay list after outputting to file

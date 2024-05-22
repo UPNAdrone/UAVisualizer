@@ -1,3 +1,4 @@
+import rospy
 import websockets
 import asyncio
 import logging
@@ -23,6 +24,9 @@ mav_connection = mavutil.mavlink_connection(connection_string, baud=57600)
 # Define the maximum size of the message queue
 MAX_QUEUE_SIZE = 2
 
+# Initialize list to store delays
+delay_list = []
+
 def request_message_interval(message_id, interval_ms):
     # Send command to set message interval
     mav_connection.mav.command_long_send(
@@ -39,6 +43,7 @@ async def send_model_state():
     async with websockets.connect("ws://127.0.0.1:7890", ping_timeout=None, ping_interval=5) as websocket:
 
         message_queue = []  # Initialize an empty list to act as a message queue
+        message_count = 0
 
         while True:
             # Wait for a MAVLink message
@@ -46,7 +51,7 @@ async def send_model_state():
             data_string = None
             # Extract relevant data based on message type
             '''
-              MESSAGE_LENGTH: 8 VALUES + ID
+              MESSAGE_LENGTH: TIMESTAMP + 8 VALUES + ID
               BY ID: 
                 SYS_STATUS: 1
                 GLOBAL_POSITION_INT: 2
@@ -58,12 +63,14 @@ async def send_model_state():
 
             '''
             if msg is not None:
+                timestamp = time.time()
                 if msg.get_type() == 'SYS_STATUS':
                     # Extract battery status information from the message
                     voltage = msg.voltage_battery / 1000.0  # Convert to volts
                     current = msg.current_battery / 100.0   # Convert to amperes
 
                     data = np.round([1, voltage, current, 0, 0, 0, 0, 0, 0], 4)
+                    data = np.concatenate(([timestamp], data))
                     data_string = ','.join(map(str, data))
 
                 elif msg.get_type() == 'GLOBAL_POSITION_INT':
@@ -79,7 +86,8 @@ async def send_model_state():
                     current_x, current_y, current_z = geodetic2ned(lat, lon, alt, location_origin[0], location_origin[1],
                                                                    location_origin[2], ell=None, deg=True)
 
-                    data = np.round([2, lat, lon, alt, gs, hdg, current_x, current_y, current_z], 4)
+                    data = np.round([2, lat, lon, alt, gs, hdg, current_x, current_y, current_z], 7)
+                    data = np.concatenate(([timestamp], data))
                     data_string = ','.join(map(str, data))
 
                 elif msg.get_type() == 'SCALED_IMU':
@@ -92,6 +100,7 @@ async def send_model_state():
                     zgyro = msg.zgyro
 
                     data = np.round([3, xacc, yacc, zacc, xgyro, ygyro, zgyro, 0, 0], 4)
+                    data = np.concatenate(([timestamp], data))
                     data_string = ','.join(map(str, data))
 
                 elif msg.get_type() == 'HOME_POSITION':
@@ -102,15 +111,16 @@ async def send_model_state():
 
                     home_north, home_east, home_down = geodetic2ned(home_lat, home_lon, home_alt, location_origin[0],
                                                                     location_origin[1], location_origin[2], ell=None, deg=True)
-                    home_ned = np.array([4, home_north, home_east, home_down, 0, 0, 0, 0, 0])
-
-                    data_string = ','.join(map(str, home_ned))
+                    home_coords = np.array([4, home_lat, home_lon, home_alt, 0, 0, 0, 0, 0])
+                    data = np.concatenate(([timestamp], home_coords))
+                    data_string = ','.join(map(str, data))
 
                 elif msg.get_type() == 'HEARTBEAT':
                     # Extract the autopilot's current mode
                     custom_mode = msg.custom_mode
 
                     data = np.array([5, custom_mode, 0, 0, 0, 0, 0, 0, 0])
+                    data = np.concatenate(([timestamp], data))
                     data_string = ','.join(map(str, data))
 
                 elif msg.get_type() == 'GPS_RAW_INT':
@@ -119,7 +129,7 @@ async def send_model_state():
                     vdop = msg.epv
 
                     data = np.array([6, hdop, vdop, 0, 0, 0, 0, 0, 0])
-
+                    data = np.concatenate(([timestamp], data))
                     data_string = ','.join(map(str, data))
 
                 elif msg.get_type() == 'ATTITUDE':
@@ -129,7 +139,7 @@ async def send_model_state():
                     yaw = msg.yaw
 
                     data = np.array([7, roll, pitch, yaw, 0, 0, 0, 0, 0])
-
+                    data = np.concatenate(([timestamp], data))
                     data_string = ','.join(map(str, data))
 
             if data_string is not None:
@@ -142,6 +152,23 @@ async def send_model_state():
             if message_queue:
                 await websocket.send(str(message_queue.pop(0)))
                 msg_recv = await websocket.recv()
+                recv_timestamp = time.time()
+                '''
+                delay = recv_timestamp - float(msg_recv.split(',')[0])
+                print("Delay:", delay)
+                # Append delay to list
+                delay_list.append(delay)
+                message_count += 1
+
+                # Output list to a text file after every 1000 messages
+                if message_count % 1000 == 0:
+                    with open('delay_output.txt', 'a') as file:
+                        for delay_value in delay_list:
+                            file.write(str(delay_value) + '\n')
+                    # Clear the delay list after outputting to file
+                    delay_list.clear()
+                '''
+
                 # print("Received: ", msg_recv)
                 await asyncio.sleep(0.1)  # Adjust the frequency as needed
 
@@ -180,4 +207,4 @@ if __name__ == '__main__':
         loop.create_task(send_model_state())  # Create a task for the coroutine
         loop.run_forever()  # Run the event loop indefinitely
     except KeyboardInterrupt:
-        print("Shutting down")
+        rospy.loginfo("Shutting down")
